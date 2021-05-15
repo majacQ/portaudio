@@ -77,8 +77,8 @@
 #include "pa_trace.h" /* still usefull?*/
 #include "pa_debugprint.h"
 
-#ifndef PA_SVN_REVISION
-#include "pa_svnrevision.h"
+#ifndef PA_GIT_REVISION
+#include "pa_gitrevision.h"
 #endif
 
 /**
@@ -91,7 +91,7 @@
  * This is incremented when we add functionality in a backwards-compatible manner.
  * Or it is set to zero when paVersionMajor is incremented.
  */
-#define paVersionMinor      5
+#define paVersionMinor      6
 
 /**
  * This is incremented when we make backwards-compatible bug fixes.
@@ -110,7 +110,7 @@
 #define TOSTRING(x) STRINGIFY(x)
 
 #define PA_VERSION_STRING_ TOSTRING(paVersionMajor) "." TOSTRING(paVersionMinor) "." TOSTRING(paVersionSubMinor)
-#define PA_VERSION_TEXT_   "PortAudio V" PA_VERSION_STRING_ "-devel, revision " TOSTRING(PA_SVN_REVISION)
+#define PA_VERSION_TEXT_   "PortAudio V" PA_VERSION_STRING_ "-devel, revision " TOSTRING(PA_GIT_REVISION)
 
 int Pa_GetVersion( void )
 {
@@ -126,11 +126,11 @@ static PaVersionInfo versionInfo_ = {
     /*.versionMajor =*/ paVersionMajor,
     /*.versionMinor =*/ paVersionMinor,
     /*.versionSubMinor =*/ paVersionSubMinor,
-    /*.versionControlRevision =*/ TOSTRING(PA_SVN_REVISION),
+    /*.versionControlRevision =*/ TOSTRING(PA_GIT_REVISION),
     /*.versionText =*/ PA_VERSION_TEXT_
 };
 
-const PaVersionInfo* Pa_GetVersionInfo()
+const PaVersionInfo* Pa_GetVersionInfo( void )
 {
     return &versionInfo_;
 }
@@ -551,7 +551,8 @@ PaError Pa_Terminate( void )
 
     if( PA_IS_INITIALISED_ )
     {
-        if( --initializationCount_ == 0 )
+        // leave initializationCount_>0 so that Pa_CloseStream() can execute
+        if( initializationCount_ == 1 )
         {
             CloseOpenStreams();
 
@@ -559,6 +560,7 @@ PaError Pa_Terminate( void )
 
             PaUtil_DumpTraceMessages();
         }
+        --initializationCount_;
         result = paNoError;
     }
     else

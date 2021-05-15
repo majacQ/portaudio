@@ -323,8 +323,10 @@ int _PA_LOCAL_IMPL(snd_pcm_hw_params_get_buffer_size_max) (const snd_pcm_hw_para
     snd_pcm_uframes_t pmax = 0;
     unsigned int      pcnt = 0;
 
+    dir = 0;
     if(( ret = _PA_LOCAL_IMPL(snd_pcm_hw_params_get_period_size_max)(params, &pmax, &dir) ) < 0 )
         return ret;
+    /* REVIEW: why no dir=0 here? is it intended to use the rounding mode of get_period_size_max? either set dir=0 or add explanatory comment. -- rossb 12 May 2019 */
     if(( ret = _PA_LOCAL_IMPL(snd_pcm_hw_params_get_periods_max)(params, &pcnt, &dir) ) < 0 )
         return ret;
 
@@ -825,13 +827,13 @@ static void Terminate( struct PaUtilHostApiRepresentation *hostApi )
     PaAlsa_CloseLibrary();
 }
 
-/** Determine max channels and default latencies.
+/** Determine max channels, default latencies, default sample rate.
  *
- * This function provides functionality to grope an opened (might be opened for capture or playback) pcm device for
+ * This function provides functionality to query an opened (might be opened for capture or playback) pcm device for
  * traits like max channels, suitable default latencies and default sample rate. Upon error, max channels is set to zero,
  * and a suitable result returned. The device is closed before returning.
  */
-static PaError GropeDevice( snd_pcm_t* pcm, int isPlug, StreamDirection mode, int openBlocking,
+static PaError DetermineDeviceInfos( snd_pcm_t* pcm, int isPlug, StreamDirection mode, int openBlocking,
         PaAlsaDeviceInfo* devInfo )
 {
     PaError result = paNoError;
@@ -842,7 +844,6 @@ static PaError GropeDevice( snd_pcm_t* pcm, int isPlug, StreamDirection mode, in
     double * defaultLowLatency, * defaultHighLatency, * defaultSampleRate =
         &devInfo->baseDeviceInfo.defaultSampleRate;
     double defaultSr = *defaultSampleRate;
-    int dir;
 
     assert( pcm );
 
@@ -920,7 +921,7 @@ static PaError GropeDevice( snd_pcm_t* pcm, int isPlug, StreamDirection mode, in
     alsaBufferFrames = 512;
     alsaPeriodFrames = 128;
     ENSURE_( alsa_snd_pcm_hw_params_set_buffer_size_near( pcm, hwParams, &alsaBufferFrames ), paUnanticipatedHostError );
-    ENSURE_( alsa_snd_pcm_hw_params_set_period_size_near( pcm, hwParams, &alsaPeriodFrames, &dir ), paUnanticipatedHostError );
+    ENSURE_( alsa_snd_pcm_hw_params_set_period_size_near( pcm, hwParams, &alsaPeriodFrames, NULL ), paUnanticipatedHostError );
     *defaultLowLatency = (double) (alsaBufferFrames - alsaPeriodFrames) / defaultSr;
 
     /* Base the high latency case on values four times larger */
@@ -930,7 +931,7 @@ static PaError GropeDevice( snd_pcm_t* pcm, int isPlug, StreamDirection mode, in
     ENSURE_( alsa_snd_pcm_hw_params_any( pcm, hwParams ), paUnanticipatedHostError );
     ENSURE_( SetApproximateSampleRate( pcm, hwParams, defaultSr ), paUnanticipatedHostError );
     ENSURE_( alsa_snd_pcm_hw_params_set_buffer_size_near( pcm, hwParams, &alsaBufferFrames ), paUnanticipatedHostError );
-    ENSURE_( alsa_snd_pcm_hw_params_set_period_size_near( pcm, hwParams, &alsaPeriodFrames, &dir ), paUnanticipatedHostError );
+    ENSURE_( alsa_snd_pcm_hw_params_set_period_size_near( pcm, hwParams, &alsaPeriodFrames, NULL ), paUnanticipatedHostError );
     *defaultHighLatency = (double) (alsaBufferFrames - alsaPeriodFrames) / defaultSr;
 
     *minChannels = (int)minChans;
@@ -1166,10 +1167,10 @@ static PaError FillInDevInfo( PaAlsaHostApiRepresentation *alsaApi, HwDevInfo* d
     if( deviceHwInfo->hasCapture &&
         OpenPcm( &pcm, deviceHwInfo->alsaName, SND_PCM_STREAM_CAPTURE, blocking, 0 ) >= 0 )
     {
-        if( GropeDevice( pcm, deviceHwInfo->isPlug, StreamDirection_In, blocking, devInfo ) != paNoError )
+        if( DetermineDeviceInfos( pcm, deviceHwInfo->isPlug, StreamDirection_In, blocking, devInfo ) != paNoError )
         {
             /* Error */
-            PA_DEBUG(( "%s: Failed groping %s for capture\n", __FUNCTION__, deviceHwInfo->alsaName ));
+            PA_DEBUG(( "%s: Failed querying %s for capture device info\n", __FUNCTION__, deviceHwInfo->alsaName ));
             goto end;
         }
     }
@@ -1178,10 +1179,10 @@ static PaError FillInDevInfo( PaAlsaHostApiRepresentation *alsaApi, HwDevInfo* d
     if( deviceHwInfo->hasPlayback &&
         OpenPcm( &pcm, deviceHwInfo->alsaName, SND_PCM_STREAM_PLAYBACK, blocking, 0 ) >= 0 )
     {
-        if( GropeDevice( pcm, deviceHwInfo->isPlug, StreamDirection_Out, blocking, devInfo ) != paNoError )
+        if( DetermineDeviceInfos( pcm, deviceHwInfo->isPlug, StreamDirection_Out, blocking, devInfo ) != paNoError )
         {
             /* Error */
-            PA_DEBUG(( "%s: Failed groping %s for playback\n", __FUNCTION__, deviceHwInfo->alsaName ));
+            PA_DEBUG(( "%s: Failed querying %s for playback device info\n", __FUNCTION__, deviceHwInfo->alsaName ));
             goto end;
         }
     }
@@ -2324,6 +2325,7 @@ static PaError PaAlsaStreamComponent_DetermineFramesPerBuffer( PaAlsaStreamCompo
         /* It may be that the device only supports 2 periods for instance */
         dir = 0;
         ENSURE_( alsa_snd_pcm_hw_params_get_periods_min( hwParams, &minPeriods, &dir ), paUnanticipatedHostError );
+        /* REVIEW: why no dir=0 here? is it intended to use the rounding mode of get_periods_min? either set dir=0 or add explanatory comment. -- rossb 12 May 2019 */
         ENSURE_( alsa_snd_pcm_hw_params_get_periods_max( hwParams, &maxPeriods, &dir ), paUnanticipatedHostError );
         assert( maxPeriods > 1 );
 
@@ -3209,6 +3211,7 @@ error:
         unsigned int _min = 0, _max = 0;
         int _dir = 0;
         ENSURE_( alsa_snd_pcm_hw_params_get_rate_min( hwParams, &_min, &_dir ), paUnanticipatedHostError );
+        /* REVIEW: why no dir=0 here? is it intended to use the rounding mode of get_rate_min? either set dir=0 or add explanatory comment -- rossb 12 May 2019 */
         ENSURE_( alsa_snd_pcm_hw_params_get_rate_max( hwParams, &_max, &_dir ), paUnanticipatedHostError );
         PA_DEBUG(( "%s: SR min = %u, max = %u, req = %u\n", __FUNCTION__, _min, _max, reqRate ));
     }
@@ -3805,7 +3808,22 @@ static PaError PaAlsaStream_WaitForFrames( PaAlsaStream *self, unsigned long *fr
             totalFds += self->playback.nfds;
         }
 
+#ifdef PTHREAD_CANCELED
+        if( self->callbackMode )
+        {
+            /* To allow 'Abort' to terminate the callback thread, enable cancelability just for poll() (& disable after) */
+            pthread_setcancelstate( PTHREAD_CANCEL_ENABLE, NULL );
+        }
+#endif
+
         pollResults = poll( self->pfds, totalFds, pollTimeout );
+
+#ifdef PTHREAD_CANCELED
+        if( self->callbackMode )
+        {
+            pthread_setcancelstate( PTHREAD_CANCEL_DISABLE, NULL );
+        }
+#endif
 
         if( pollResults < 0 )
         {
@@ -4175,12 +4193,18 @@ static void *CallbackThreadFunc( void *userData )
     int streamStarted = 0;
 
     assert( stream );
+    /* Not implemented */
+    assert( !stream->primeBuffers );
 
     /* Execute OnExit when exiting */
     pthread_cleanup_push( &OnExit, stream );
-
-    /* Not implemented */
-    assert( !stream->primeBuffers );
+#ifdef PTHREAD_CANCELED
+    /* 'Abort' will use thread cancellation to terminate the callback thread, but the Alsa-lib functions
+     * are NOT cancel-safe, (and can end up in an inconsistent state).  So, disable cancelability for
+     * the thread here, and just re-enable it for the poll() in PaAlsaStream_WaitForFrames(). */
+    pthread_testcancel();
+    pthread_setcancelstate( PTHREAD_CANCEL_DISABLE, NULL );
+#endif
 
     /* @concern StreamStart If the output is being primed the output pcm needs to be prepared, otherwise the
      * stream is started immediately. The latter involves signaling the waiting main thread.
@@ -4265,10 +4289,6 @@ static void *CallbackThreadFunc( void *userData )
         {
             xrun = 0;
 
-#ifdef PTHREAD_CANCELED
-           pthread_testcancel();
-#endif
-
             /** @concern Xruns Under/overflows are to be reported to the callback */
             if( stream->underrun > 0.0 )
             {
@@ -4299,11 +4319,12 @@ static void *CallbackThreadFunc( void *userData )
 #if 0
             CallbackUpdate( &stream->threading );
 #endif
+
             CalculateTimeInfo( stream, &timeInfo );
             PaUtil_BeginBufferProcessing( &stream->bufferProcessor, &timeInfo, cbFlags );
             cbFlags = 0;
 
-            /* CPU load measurement should include processing activivity external to the stream callback */
+            /* CPU load measurement should include processing activity external to the stream callback */
             PaUtil_BeginCpuLoadMeasurement( &stream->cpuLoadMeasurer );
 
             framesGot = framesAvail;
@@ -4334,7 +4355,6 @@ static void *CallbackThreadFunc( void *userData )
             {
                 /* Go back to polling for more frames */
                 break;
-
             }
 
             if( paContinue != callbackResult )

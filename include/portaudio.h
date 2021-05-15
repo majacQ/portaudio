@@ -51,51 +51,68 @@ extern "C"
 #endif /* __cplusplus */
 
 /** Retrieve the release number of the currently running PortAudio build.
- * For example, for version "19.5.1" this will return 0x00130501.
- */
+ For example, for version "19.5.1" this will return 0x00130501.
+
+ @see paMakeVersionNumber
+*/
 int Pa_GetVersion( void );
 
 /** Retrieve a textual description of the current PortAudio build,
- * eg "PortAudio V19.5.0-devel, revision 1952M".
- * The format of the text may change so do not try to parse the returned string.
- * @deprecated use PaVersionInfo() instead
- */
+ e.g. "PortAudio V19.5.0-devel, revision 1952M".
+ The format of the text may change in the future. Do not try to parse the
+ returned string.
+
+ @deprecated As of 19.5.0, use Pa_GetVersionInfo()->versionText instead.
+*/
 const char* Pa_GetVersionText( void );
 
 /**
- * Generate a packed integer version number in the same format used
- * by Pa_GetVersion(). Use this to compare a specified version number with 
- * the currently running version. For example:
- *
- * if (Pa_GetVersion() < paMakeVersionNumber(19,5,1)) {}
- */
+ Generate a packed integer version number in the same format used
+ by Pa_GetVersion(). Use this to compare a specified version number with
+ the currently running version. For example:
+
+ @code
+     if( Pa_GetVersion() < paMakeVersionNumber(19,5,1) ) {}
+ @endcode
+
+ @see Pa_GetVersion, Pa_GetVersionInfo
+ @version Available as of 19.5.0.
+*/
 #define paMakeVersionNumber(major, minor, subminor) \
     (((major)&0xFF)<<16 | ((minor)&0xFF)<<8 | ((subminor)&0xFF))
 
 
 /**
- * A structure containing the components of the version numbers.
- */
+ A structure containing PortAudio API version information.
+ @see Pa_GetVersionInfo, paMakeVersionNumber
+ @version Available as of 19.5.0.
+*/
 typedef struct PaVersionInfo {
     int versionMajor;
     int versionMinor;
     int versionSubMinor;
     /**
-     * This is currently the SVN revision but may change in the future.
-     * The versionControlRevision is updated by running a script before compiling code.
-     * If the update does not occur then this value may be less 
-     * than the actual SVN revision number.
-     */
+     This is currently the Git revision hash but may change in the future.
+     The versionControlRevision is updated by running a script before compiling the library.
+     If the update does not occur, this value may refer to an earlier revision.
+    */
     const char *versionControlRevision;
     /** Version as a string, for example "PortAudio V19.5.0-devel, revision 1952M" */
     const char *versionText;
 } PaVersionInfo;
     
-/**
- * The structure that this points to is statically allocated.
- * Do not attempt to free it or modify it.
- */
-const PaVersionInfo* Pa_GetVersionInfo();
+/** Retrieve version information for the currently running PortAudio build.
+ @return A pointer to an immutable PaVersionInfo structure.
+
+ @note This function can be called at any time. It does not require PortAudio
+ to be initialized. The structure pointed to is statically allocated. Do not
+ attempt to free it or modify it.
+
+ @see PaVersionInfo, paMakeVersionNumber
+ @version Available as of 19.5.0.
+*/
+const PaVersionInfo* Pa_GetVersionInfo( void );
+
 
 /** Error codes returned by PortAudio functions.
  Note that with the exception of paNoError, all PaErrorCodes are negative.
@@ -134,7 +151,8 @@ typedef enum PaErrorCode
     paCanNotReadFromAnOutputOnlyStream,
     paCanNotWriteToAnInputOnlyStream,
     paIncompatibleStreamHostApi,
-    paBadBufferPtr
+    paBadBufferPtr,
+    paIsInitialized
 } PaErrorCode;
 
 
@@ -272,6 +290,103 @@ typedef enum PaHostApiTypeId
     paWASAPI=13,
     paAudioScienceHPI=14
 } PaHostApiTypeId;
+
+
+/** Returns the number of compiled-in host APIs in this build of PortAudio.
+
+ The returned value is large enough that it can be used to dimension
+ arrays passed to Pa_GetAvailableHostApis and Pa_GetSelectedHostApis.
+
+ FIXME REVIEW The "Available" name should match whatever is chosen for
+ Pa_GetAvailableHostApis
+
+ @see Pa_GetAvailableHostApis, Pa_GetSelectedHostApis
+*/
+int Pa_GetAvailableHostApisCount( void );
+
+
+/** Returns the type ids of all compiled-in host APIs in initialization order.
+
+ Note that the compiled-in host APIs are not necessarily those that are
+ installed on the system. It is possible for compiled-in dynamically loaded
+ host APIs to be not installed on the system, and it is possible for
+ installed audio APIs to not be supported (compiled in to) PortAudio.
+
+ @param hostApiTypes (OUT) An array that will be filled with
+ host API identifiers, having values belonging to the PaHostApiTypeId enumeration.
+
+ @param arrayCapacity The number of usable elements in the hostApiTypes array.
+ This value never need by greater than the value returned by
+ Pa_GetAvailableHostApisCount().
+
+ @param count (OUT) The number of host APIs, returned even on error.
+ Upon success, this will be the number of valid elements stored in hostApiTypes.
+
+ FIXME REVIEW: Consider a different name for this function, both "available"
+ and "supported" are ambiguous between what is available/supported on the
+ target platform and what is compiled into PA. Keep in mind that
+ Pa_IsFormatSupported refers to formats supported by a device.
+ Proposals:
+ GetConfiguredHostApis, GetCompiledHostApis
+ NOTE: also fix name oPa_GetAvailableHostApisCount
+
+ @see Pa_SelectHostApis
+*/
+PaError Pa_GetAvailableHostApis( PaHostApiTypeId *hostApiTypes, int arrayCapacity, int *count );
+
+
+/** Select host APIs and their initialization order.
+
+ This function may only be called prior to calling Pa_Initialize()
+ or after calling Pa_Terminate(). The selected host APIs take effect the
+ next time that Pa_Initialize() is invoked.
+
+ @param hostApiTypes An array of host API identifiers, having values belonging 
+ to the PaHostApiTypeId enumeration. The specified host APIs must selected
+ from thosed returned by Pa_GetAvailableHostApis(). For example, it would be an 
+ error to specify a Windows host API while using PortAudio on Mac OS X.
+
+ @param count The number of elements in the hostApiTypes array. A count of
+ zero causes the default host API selection to be restored.
+
+ @return A PaErrorCode indicating whether the call succeeded or failed.
+
+ The paHostApiNotFound error code indicates that a host API specified by the
+ hostApiTypeIds parameter is not available.
+
+ The paInvalidHostApi error indicates that there was a problem with the
+ hostApiTypes array. E.g. it contained invalid or duplicate entries.
+
+ @note The host API initialization order determines default devices.
+ There is no predictable relationship between the order that host APIs appear
+ in hostApiTypes, and their hostApiIndexes assigned by Pa_Initialize().
+
+ @see PaHostApiTypeId
+*/
+PaError Pa_SelectHostApis( const PaHostApiTypeId *hostApiTypes, int count );
+
+
+/** Returns the type ids of the selected host APIs in initialization order.
+
+ @param hostApiTypes (OUT) An array that will be filled with
+ host API identifiers, having values belonging to the PaHostApiTypeId enumeration.
+
+ @param arrayCapacity The number of usable elements in the hostApiTypes array.
+ This value never need by greater than the value returned by
+ Pa_GetAvailableHostApisCount().
+
+ @param count (OUT) The number of selected host APIs, returned even on error.
+ Upon success, this will be the number of valid elements stored in hostApiTypes.
+
+ @return A PaErrorCode indicating whether the call succeeded or failed.
+
+ The paInsufficientMemory error indicates that arrayCapacity was not large enough
+ to accommodate the list of selected host APIs. In this case, the needed
+ count is returned in the count parameter.
+
+ @see Pa_SelectHostApis
+*/
+PaError Pa_GetSelectedHostApis( PaHostApiTypeId *hostApiTypes, int arrayCapacity, int *count );
 
 
 /** A structure containing information about a particular host API. */
@@ -934,7 +1049,7 @@ PaError Pa_CloseStream( PaStream *stream );
  (ie once a call to Pa_StopStream() will not block).
  A stream will become inactive after the stream callback returns non-zero,
  or when Pa_StopStream or Pa_AbortStream is called. For a stream providing audio
- output, if the stream callback returns paComplete, or Pa_StopStream is called,
+ output, if the stream callback returns paComplete, or Pa_StopStream() is called,
  the stream finished callback will not be called until all generated sample data
  has been played.
  
@@ -1132,7 +1247,7 @@ PaError Pa_ReadStream( PaStream* stream,
 
 
 /** Write samples to an output stream. This function doesn't return until the
- entire buffer has been consumed - this may involve waiting for the operating
+ entire buffer has been written - this may involve waiting for the operating
  system to consume the data.
 
  @param stream A pointer to an open stream previously created with Pa_OpenStream.
